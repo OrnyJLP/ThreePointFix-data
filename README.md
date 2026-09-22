@@ -2,9 +2,9 @@
 
 The offline landmark database used by the **Three Point Fix** sailing-navigation training app:
 lighthouses, harbour-entrance lights, church towers, forts and towers along the coast from
-**Ría de Vigo to Albufeira**, plus **Madeira, Porto Santo and the Desertas**, each with its LAT/LON.
+**Ría de Vigo to Albufeira**, plus **Madeira, Porto Santo and the Desertas**, and the Dutch **Waddenzee, IJsselmeer/Markermeer and North Sea coast**, each with its LAT/LON.
 
-`landmarks.db` is SQLite: `region` → `town` → `landmark` (`name`, `kind`, `lat`, `lon`,
+`landmarks.db` is SQLite: `area` → `region` → `town` → `landmark` (`name`, `kind`, `lat`, `lon`,
 `description` such as `Fl(3) W 15s · 57 m · 24 NM`) and a `meta` table whose `version`
 (yyyymmddNN) the app compares before downloading an update.
 

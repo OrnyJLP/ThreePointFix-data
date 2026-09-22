@@ -22,6 +22,12 @@ UA = "ThreePointFix-hobby/0.1 (personal navigation-training app)"
 AREAS = {
     "": "36.9,-9.6,42.35,-8.05",              # Ria de Vigo (incl. Cies) down and round to Albufeira/Vilamoura
     "madeira_": "32.35,-17.35,33.20,-16.20",  # Madeira, Porto Santo, Desertas
+    "nl_": "52.0,4.0,53.6,7.25",              # Netherlands: Waddenzee, IJsselmeer/Markermeer, North Sea coast
+}
+
+# Lakes are not "coastline" in OSM; their outlines are fetched separately and used as shore.
+LAKES = {
+    "nl_": "IJsselmeer|Markermeer|IJmeer|Gooimeer|Eemmeer|Ketelmeer|Zwarte Meer|Veluwemeer|Wolderwijd|Nuldernauw|Nijkerkernauw",
 }
 
 
@@ -42,8 +48,18 @@ def queries(BBOX):
     # which of the places are Spanish (everything else in the box is Portugal)
     "places_es": """area["ISO3166-1"="ES"][admin_level=2]->.es;
         node["place"~"^(city|town|village)$"](area.es)(41.8,-9.6,42.35,-8.05);out ids;""",
+    # and which are German (the Ems box straddles the border)
+    "places_de": """area["ISO3166-1"="DE"][admin_level=2]->.de;
+        node["place"~"^(city|town|village)$"](area.de)(53.0,6.5,53.6,7.25);out ids;""",
     "coastline": f"""way["natural"="coastline"]({BBOX});out geom;""",
   }
+
+
+def lake_query(names, BBOX):
+    return f"""(
+        relation["natural"="water"]["name"~"^({names})$"]({BBOX});
+        way["natural"="water"]["name"~"^({names})$"]({BBOX});
+      );out geom;"""
 
 
 def fetch(name: str, body: str) -> None:
@@ -74,7 +90,9 @@ if __name__ == "__main__":
     RAW.mkdir(exist_ok=True)
     for prefix, bbox in AREAS.items():
         for n, q in queries(bbox).items():
-            if n == "places_es" and prefix:
-                continue   # only the mainland box straddles a border
+            if (n == "places_es" and prefix) or (n == "places_de" and prefix != "nl_"):
+                continue   # border queries only where a box straddles one
             fetch(prefix + n, q)
             time.sleep(3)
+        if prefix in LAKES:
+            fetch(prefix + "lakes", lake_query(LAKES[prefix], bbox))

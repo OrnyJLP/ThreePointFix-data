@@ -24,7 +24,7 @@ NM = 1852.0
 # How far from the waterline something may stand and still be offered as a landmark (metres).
 MAX_COAST_M = {"lighthouse": 3000, "harbour_light": 3000, "landmark": 3000,
                "church": 700, "fort": 500, "tower": 1000}
-TOWN_COAST_M = {"city": 5000, "town": 3000, "village": 1200}
+TOWN_COAST_M = {"city": 5000, "town": 4000, "village": 1200}
 TOWN_RADIUS_NM = 8          # keep in step with LandmarkDb.GetLandmarksNear
 MIN_LANDMARKS_PER_TOWN = 3
 
@@ -32,18 +32,34 @@ MIN_LANDMARKS_PER_TOWN = 3
 # lies 8 km up the lagoon, Vilamoura is a resort). Positioned on a landmark: (town name, landmark name).
 EXTRA_TOWNS = [("Aveiro (Barra)", "Farol de Aveiro"), ("Vilamoura", "Vilamoura")]
 
-REGIONS = [  # id, name, country, sort
-    (1, "Galicia – Rías Baixas", "ES", 1),
-    (2, "Norte – Minho to Douro", "PT", 2),
-    (3, "Centro – Aveiro to Peniche", "PT", 3),
-    (4, "Lisboa & Setúbal", "PT", 4),
-    (5, "Alentejo", "PT", 5),
-    (6, "Algarve", "PT", 6),
-    (7, "Madeira & Porto Santo", "PT", 7),
+AREAS = [  # id, name, sort – the top-level choice in the app
+    (1, "Iberia & Madeira", 1),
+    (2, "Netherlands", 2),
+]
+
+REGIONS = [  # id, area, name, country, sort
+    (1, 1, "Galicia – Rías Baixas", "ES", 1),
+    (2, 1, "Norte – Minho to Douro", "PT", 2),
+    (3, 1, "Centro – Aveiro to Peniche", "PT", 3),
+    (4, 1, "Lisboa & Setúbal", "PT", 4),
+    (5, 1, "Alentejo", "PT", 5),
+    (6, 1, "Algarve", "PT", 6),
+    (7, 1, "Madeira & Porto Santo", "PT", 7),
+    (8, 2, "Waddenzee", "NL", 8),
+    (9, 2, "IJsselmeer & Markermeer", "NL", 9),
+    (10, 2, "Noordzeekust", "NL", 10),
 ]
 
 
 def region_for(lat: float, spanish: bool, lon: float = 0.0) -> int:
+    if lat > 50:   # the Netherlands
+        # Waddenzee = north of the Afsluitdijk (Den Oever 52.94,5.03 – Kornwerderzand 53.07,5.34),
+        # and east of it everything from Friesland's north coast to the Eems
+        if lon < 4.8 and lat < 52.9:
+            return 10
+        if (lon < 5.35 and lat > 52.94 + (lon - 5.03) * (0.13 / 0.31)) or (lon >= 5.35 and lat >= 53.08):
+            return 8
+        return 9 if lon >= 4.85 else 10
     if lon < -12:
         return 7
     if spanish:
@@ -87,9 +103,15 @@ CELL = 0.01  # degrees
 
 
 class Coast:
-    def __init__(self, ways):
+    def __init__(self, elements):
         self.grid = collections.defaultdict(list)
         n = 0
+        ways = []
+        for e in elements:            # coastline ways, lake ways, or lake relations with member ways
+            if e["type"] == "relation":
+                ways += [m for m in e.get("members", []) if m.get("geometry")]
+            else:
+                ways.append(e)
         for w in ways:
             g = w.get("geometry") or []
             for a, b in zip(g, g[1:]):
@@ -104,7 +126,7 @@ class Coast:
                     for key in {self._key(la1, lo1), self._key(la2, lo2)}:
                         self.grid[key].append(seg)
                     n += 1
-        print(f"coastline: {len(ways)} ways, {n} segments")
+        print(f"shore: {len(ways)} ways, {n} segments")
 
     @staticmethod
     def _key(lat, lon):
@@ -171,15 +193,16 @@ def light_colour_word(t):
 
 
 def main():
-    coast = Coast(load("coastline"))
+    coast = Coast(load("coastline") + load("lakes"))
     spanish_places = {e["id"] for e in load("places_es")}
+    german_places = {e["id"] for e in load("places_de")}   # the Eems box reaches into Germany
 
     # ------------------------------------------------------------ towns
     towns = []
     for e in load("places"):
         t = e["tags"]
         name = t.get("name")
-        if not name:
+        if not name or e["id"] in german_places:
             continue
         d = coast.distance(e["lat"], e["lon"], TOWN_COAST_M[t["place"]])
         if d is None:
@@ -210,7 +233,14 @@ def main():
         st = t.get("seamark:type", "")
         if st == "landmark" and t.get("man_made") != "lighthouse":
             cat = (t.get("seamark:landmark:category") or t.get("man_made") or "landmark").replace("_", " ")
+            if cat in ("windmotor", "wind turbine") or t.get("generator:source") == "wind":
+                continue   # wind farms: twenty identical turbines are no landmark
+            if not name and cat not in ("chimney", "tower", "water tower", "church", "windmill", "mast",
+                                        "radio mast", "radar tower", "monument", "dome", "flagstaff"):
+                continue
             add(e, "landmark", name or cat.capitalize(), cat if name else None, 2)
+            if not name:
+                marks[-1]["generic"] = True
             continue
         # man_made=lighthouse without any seamark data is only trusted when it is called a lighthouse;
         # pier heads and marina moles are often tagged that way too
@@ -303,10 +333,10 @@ def main():
     for m in marks:
         m["town"] = min(towns, key=lambda t: dist_m(t["lat"], t["lon"], m["lat"], m["lon"]))["id"]
 
-    # unnamed harbour lights get their town in the name: "Green light – Póvoa de Varzim"
+    # unnamed lights and landmarks get their town in the name: "Green light – Póvoa de Varzim"
     town_name = {t["id"]: t["name"] for t in towns}
     for m in marks:
-        if m["name"].endswith(" light") or m["name"] == "Lighthouse":
+        if m["name"].endswith(" light") or m["name"] == "Lighthouse" or m.get("generic"):
             m["name"] = f"{m['name']} – {town_name[m['town']]}"
 
     # ------------------------------------------------------------ write
@@ -314,7 +344,9 @@ def main():
     db = sqlite3.connect(OUT)
     db.executescript("""
         CREATE TABLE meta     (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-        CREATE TABLE region   (id INTEGER PRIMARY KEY, name TEXT NOT NULL, country TEXT NOT NULL, sort_order INTEGER NOT NULL);
+        CREATE TABLE area     (id INTEGER PRIMARY KEY, name TEXT NOT NULL, sort_order INTEGER NOT NULL);
+        CREATE TABLE region   (id INTEGER PRIMARY KEY, area_id INTEGER NOT NULL REFERENCES area(id),
+                               name TEXT NOT NULL, country TEXT NOT NULL, sort_order INTEGER NOT NULL);
         CREATE TABLE town     (id INTEGER PRIMARY KEY, region_id INTEGER NOT NULL REFERENCES region(id),
                                name TEXT NOT NULL, lat REAL NOT NULL, lon REAL NOT NULL);
         CREATE TABLE landmark (id INTEGER PRIMARY KEY, osm_id TEXT NOT NULL, name TEXT NOT NULL, kind TEXT NOT NULL,
@@ -328,13 +360,15 @@ def main():
     db.executemany("INSERT INTO meta VALUES (?,?)", [
         ("version", version),
         ("built_utc", now.isoformat(timespec="seconds")),
-        ("coverage", "Ría de Vigo (ES) to Albufeira (PT), Madeira & Porto Santo"),
+        ("coverage", "Ría de Vigo (ES) to Albufeira (PT), Madeira & Porto Santo; Dutch Waddenzee, IJsselmeer/Markermeer and North Sea coast"),
         ("source", "OpenStreetMap via Overpass API"),
         ("license", "© OpenStreetMap contributors, ODbL 1.0 – https://www.openstreetmap.org/copyright"),
         ("disclaimer", "Training aid only. Not for navigation."),
     ])
     used_regions = {t["region"] for t in towns}
-    db.executemany("INSERT INTO region VALUES (?,?,?,?)", [r for r in REGIONS if r[0] in used_regions])
+    used_areas = {r[1] for r in REGIONS if r[0] in used_regions}
+    db.executemany("INSERT INTO area VALUES (?,?,?)", [a for a in AREAS if a[0] in used_areas])
+    db.executemany("INSERT INTO region VALUES (?,?,?,?,?)", [r for r in REGIONS if r[0] in used_regions])
     db.executemany("INSERT INTO town VALUES (?,?,?,?,?)",
                    [(t["id"], t["region"], t["name"], round(t["lat"], 6), round(t["lon"], 6)) for t in towns])
     db.executemany("INSERT INTO landmark (osm_id,name,kind,lat,lon,town_id,description) VALUES (?,?,?,?,?,?,?)",
